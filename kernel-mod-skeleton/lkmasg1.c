@@ -123,8 +123,36 @@ static int close(struct inode *inodep, struct file *filep)
  */
 static ssize_t read(struct file *filep, char *buffer, size_t len, loff_t *offset)
 {
-	printk(KERN_INFO "read stub");
-	return 0;
+	int bytes_read = 0;
+
+    // Check if there's data available in the buffer to read.
+    if (*offset >= BUFFER_LENGTH) {
+        return 0;  // No data available.
+    }
+
+    // Calculate the number of bytes available for reading.
+    int available_data = BUFFER_LENGTH - *offset;
+
+    // Check if the requested length is greater than the available data.
+    if (len > available_data) {
+        len = available_data;
+    }
+
+    // Copy data from the module's buffer to user space.
+    if (copy_to_user(buffer, &module_buffer[*offset], len) != 0) {
+        // Handle the copy_to_user failure, if necessary.
+        return -EFAULT;
+    }
+
+    // Update the offset to point to the next unread data in the buffer.
+    *offset += len;
+
+    // Update bytes_read with the number of bytes successfully read.
+    bytes_read = len;
+
+    printk(KERN_INFO "lkmasg1: read %d bytes from the device\n", bytes_read);
+
+    return bytes_read;
 }
 
 /*
@@ -132,6 +160,34 @@ static ssize_t read(struct file *filep, char *buffer, size_t len, loff_t *offset
  */
 static ssize_t write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
 {
-	printk(KERN_INFO "write stub");
-	return len;
+	int bytes_written = 0;
+
+    // Check if there's enough space in the buffer to store the data.
+    if (len == 0) {
+        return 0;  // Nothing to write.
+    }
+
+    // Calculate the space available in the buffer.
+    int space_available = BUFFER_LENGTH - *offset;  // Adjust the offset if necessary.
+
+    if (len > space_available) {
+        // Not enough space to write full message. Write with whatever space is available
+        len = space_available;
+    }
+
+    // Copy data from user space to the module's buffer.
+    if (copy_from_user(&module_buffer[*offset], buffer, len) != 0) {
+        // Handle the copy_from_user failure, if necessary.
+        return -EFAULT;
+    }
+
+    // Update the offset to point to the next available space in the buffer.
+    *offset += len;
+
+    // Update bytes_written with the number of bytes successfully written.
+    bytes_written = len;
+
+    printk(KERN_INFO "lkmasg1: wrote %d bytes to the device\n", bytes_written);
+
+    return bytes_written;
 }
