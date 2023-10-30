@@ -131,33 +131,30 @@ static int close(struct inode *inodep, struct file *filep)
  */
 static ssize_t read(struct file *filep, char *user_buffer, size_t len, loff_t *offset) {
     int bytes_read = 0;
-    
+
     if (!module_buffer) {
         printk(KERN_INFO "lkmasg1: Nothing to read, buffer is empty.\n");
         return 0;
     }
 
     // Calculate the available data to read from the buffer
-    int data_available = bytes_written;
+    int data_available = 0;
 
-    // Check if there's enough data available to service the read request
-    if (len > data_available) {
-        len = data_available;
-    }
-
-    // Use copy_to_user to safely send data from the module's buffer to user space
-    if (copy_to_user(user_buffer, module_buffer, len)) {
-        return -EFAULT;
+    while (data_available < len && bytes_read < bytes_written) {
+        user_buffer[bytes_read] = module_buffer[data_available];
+        data_available++;
+        bytes_read++;
     }
 
     // Remove the read data from the module's buffer
-    memmove(module_buffer, module_buffer + len, data_available - len);
-    bytes_written -= len;
+    memmove(module_buffer, module_buffer + data_available, bytes_written - data_available);
+    bytes_written -= data_available;
 
-    printk(KERN_INFO "lkmasg1: %zu bytes read from the buffer\n", len);
+    printk(KERN_INFO "lkmasg1: %d bytes read from the buffer\n", data_available);
 
-    return len;
+    return data_available;
 }
+
 
 
 /*
