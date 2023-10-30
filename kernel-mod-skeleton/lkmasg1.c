@@ -121,7 +121,6 @@ static int close(struct inode *inodep, struct file *filep)
 /*
  * Reads from device, displays in userspace, and deletes the read data
  */
-static ssize_t read(struct file *filep, char *buffer, size_t len, loff_t *offset)
 static ssize_t read(struct file *filep, char *user_buffer, size_t len, loff_t *offset) {
     int bytes_read = 0;
     
