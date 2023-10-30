@@ -122,72 +122,69 @@ static int close(struct inode *inodep, struct file *filep)
  * Reads from device, displays in userspace, and deletes the read data
  */
 static ssize_t read(struct file *filep, char *buffer, size_t len, loff_t *offset)
-{
-	int bytes_read = 0;
-
-    // Check if there's data available in the buffer to read.
-    if (*offset >= BUFFER_LENGTH) {
-        return 0;  // No data available.
+static ssize_t read(struct file *filep, char *user_buffer, size_t len, loff_t *offset) {
+    int bytes_read = 0;
+    
+    if (!module_buffer) {
+        printk(KERN_INFO "lkmasg1: Nothing to read, buffer is empty.\n");
+        return 0;
     }
 
-    // Calculate the number of bytes available for reading.
-    int available_data = BUFFER_LENGTH - *offset;
+    // Calculate the available data to read from the buffer
+    int data_available = bytes_written;
 
-    // Check if the requested length is greater than the available data.
-    if (len > available_data) {
-        len = available_data;
+    // Check if there's enough data available to service the read request
+    if (len > data_available) {
+        len = data_available;
     }
 
-    // Copy data from the module's buffer to user space.
-    if (copy_to_user(buffer, &module_buffer[*offset], len) != 0) {
-        // Handle the copy_to_user failure, if necessary.
+    // Use copy_to_user to safely send data from the module's buffer to user space
+    if (copy_to_user(user_buffer, module_buffer, len)) {
         return -EFAULT;
     }
 
-    // Update the offset to point to the next unread data in the buffer.
-    *offset += len;
+    // Remove the read data from the module's buffer
+    memmove(module_buffer, module_buffer + len, data_available - len);
+    bytes_written -= len;
 
-    // Update bytes_read with the number of bytes successfully read.
-    bytes_read = len;
+    printk(KERN_INFO "lkmasg1: %zu bytes read from the buffer\n", len);
 
-    printk(KERN_INFO "lkmasg1: read %d bytes from the device\n", bytes_read);
-
-    return bytes_read;
+    return len;
 }
+
 
 /*
  * Writes to the device
  */
-static ssize_t write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
-{
-	int bytes_written = 0;
-
-    // Check if there's enough space in the buffer to store the data.
-    if (len == 0) {
-        return 0;  // Nothing to write.
+static ssize_t write(struct file *filep, const char *buffer, size_t len, loff_t *offset) {
+    int bytes_written = 0;
+    
+    // If the module_buffer is not allocated, allocate it now.
+    if (module_buffer == NULL) {
+        module_buffer = kmalloc(MAX_BUFFER_SIZE, GFP_KERNEL);
+        if (!module_buffer) {
+            printk(KERN_ALERT "lkmasg1: Memory allocation failed\n");
+            return -ENOMEM;
+        }
     }
+    
+    // Calculate the available space in the buffer
+    int space_available = MAX_BUFFER_SIZE - bytes_written;
 
-    // Calculate the space available in the buffer.
-    int space_available = BUFFER_LENGTH - *offset;  // Adjust the offset if necessary.
-
+    // Check if there's enough space to store the write request
     if (len > space_available) {
-        // Not enough space to write full message. Write with whatever space is available
         len = space_available;
     }
 
-    // Copy data from user space to the module's buffer.
-    if (copy_from_user(&module_buffer[*offset], buffer, len) != 0) {
-        // Handle the copy_from_user failure, if necessary.
+    // Use copy_from_user to safely copy data from the user space to the module's buffer
+    if (copy_from_user(module_buffer + bytes_written, buffer, len)) {
         return -EFAULT;
     }
 
-    // Update the offset to point to the next available space in the buffer.
-    *offset += len;
+    // Update bytes_written to keep track of the data in the buffer
+    bytes_written += len;
 
-    // Update bytes_written with the number of bytes successfully written.
-    bytes_written = len;
-
-    printk(KERN_INFO "lkmasg1: wrote %d bytes to the device\n", bytes_written);
-
-    return bytes_written;
+    printk(KERN_INFO "lkmasg1: %zu bytes written to the buffer\n", len);
+    
+    return len;
 }
