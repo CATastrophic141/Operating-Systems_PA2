@@ -27,8 +27,9 @@ MODULE_VERSION("0.1");						 ///< A version number to inform users
  */
 static int major_number;
 
-// Declare a dynamically allocated buffer
-static char *module_buffer = NULL;
+static char *module_buffer = NULL;  // Dynamically allocated buffer
+static int buffer_size = 0;         // Size of the buffer
+static int data_in_buffer = 0;      // Amount of data in the buffer
 
 static struct class *lkmasg1Class = NULL;	///< The device-driver class struct pointer
 static struct device *lkmasg1Device = NULL; ///< The device-driver device struct pointer
@@ -40,6 +41,8 @@ static int open(struct inode *, struct file *);
 static int close(struct inode *, struct file *);
 static ssize_t read(struct file *, char *, size_t, loff_t *);
 static ssize_t write(struct file *, const char *, size_t, loff_t *);
+static int allocate_buffer(int size);
+static int release_buffer(void);
 
 /**
  * File operations structure and the functions it points to.
@@ -163,32 +166,56 @@ static ssize_t read(struct file *filep, char *user_buffer, size_t len, loff_t *o
 static ssize_t write(struct file *filep, const char *buffer, size_t len, loff_t *offset) {
     int bytes_written = 0;
     
-    // If the module_buffer is not allocated, allocate it now.
-    if (module_buffer == NULL) {
-        module_buffer = kmalloc(MAX_BUFFER_SIZE, GFP_KERNEL);
-        if (!module_buffer) {
-            printk(KERN_ALERT "lkmasg1: Memory allocation failed\n");
+    // If the buffer hasn't been allocated or is too small, allocate a new one.
+    if (!module_buffer || buffer_size < len) {
+        if (module_buffer) {
+            release_buffer();
+        }
+        if (allocate_buffer(len)) {
             return -ENOMEM;
         }
     }
-    
-    // Calculate the available space in the buffer
-    int space_available = MAX_BUFFER_SIZE - bytes_written;
 
-    // Check if there's enough space to store the write request
-    if (len > space_available) {
-        len = space_available;
+    // Write data to the buffer
+    bytes_written = write_data(buffer, len);
+
+    return bytes_written;
+}
+
+// This function allocates memory for the buffer with the specified size.
+static int allocate_buffer(int size) {
+    module_buffer = kmalloc(size, GFP_KERNEL);
+    if (!module_buffer) {
+        printk(KERN_ALERT "lkmasg1: failed to allocate buffer.\n");
+        return -ENOMEM;
     }
+    buffer_size = size;
+    data_in_buffer = 0;
+    return 0;
+}
 
-    // Use copy_from_user to safely copy data from the user space to the module's buffer
-    if (copy_from_user(module_buffer + bytes_written, buffer, len)) {
-        return -EFAULT;
+// This function releases the allocated buffer memory.
+static void release_buffer(void) {
+    if (module_buffer) {
+        kfree(module_buffer);
+        module_buffer = NULL;
     }
+    buffer_size = 0;
+    data_in_buffer = 0;
+}
 
-    // Update bytes_written to keep track of the data in the buffer
-    bytes_written += len;
-
-    printk(KERN_INFO "lkmasg1: %zu bytes written to the buffer\n", len);
-    
-    return len;
+// This function writes data to the buffer.
+static ssize_t write_data(const char *data, size_t len) {
+    if (data_in_buffer + len > buffer_size) {
+        len = buffer_size - data_in_buffer;  // Ensure we don't exceed buffer size
+    }
+    if (len > 0) {
+        // Copy data from user space to the module's buffer
+        if (copy_from_user(module_buffer + data_in_buffer, data, len)) {
+            printk(KERN_ALERT "lkmasg1: failed to copy data from user space.\n");
+            return -EFAULT;
+        }
+        data_in_buffer += len;
+    }
+    return len;  // Return the number of bytes successfully written
 }
