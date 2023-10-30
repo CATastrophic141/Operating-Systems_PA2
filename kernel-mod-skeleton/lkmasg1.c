@@ -133,32 +133,33 @@ static int close(struct inode *inodep, struct file *filep)
  * Reads from device, displays in userspace, and deletes the read data
  */
 static ssize_t read(struct file *filep, char *user_buffer, size_t len, loff_t *offset) {
+    int bytes_to_read = len;
     int bytes_read = 0;
 
-    if (!module_buffer) {
-        printk(KERN_INFO "lkmasg1: Nothing to read, buffer is empty.\n");
+    if (data_in_buffer == 0) {
+        // No data available to read, return 0 bytes read.
         return 0;
     }
 
-    // Calculate the available data to read from the buffer
-    int data_available = 0;
+    while (bytes_to_read > 0 && data_in_buffer > 0) {
+        // Calculate the number of bytes to copy in this iteration.
+        int bytes_to_copy = min(bytes_to_read, data_in_buffer);
 
-    while (data_available < len && bytes_read < bytes_written) {
-        user_buffer[bytes_read] = module_buffer[data_available];
-        data_available++;
-        bytes_read++;
+        if (copy_to_user(user_buffer, module_buffer, bytes_to_copy)) {
+            printk(KERN_ALERT "lkmasg1: failed to copy data to user space.\n");
+            return -EFAULT;
+        }
+
+        // Shift the remaining data in the buffer to the beginning.
+        memmove(module_buffer, module_buffer + bytes_to_copy, data_in_buffer - bytes_to_copy);
+        data_in_buffer -= bytes_to_copy;
+
+        bytes_read += bytes_to_copy;
+        bytes_to_read -= bytes_to_copy;
     }
 
-    // Remove the read data from the module's buffer
-    memmove(module_buffer, module_buffer + data_available, bytes_written - data_available);
-    bytes_written -= data_available;
-
-    printk(KERN_INFO "lkmasg1: %d bytes read from the buffer\n", data_available);
-
-    return data_available;
+    return bytes_read;
 }
-
-
 
 /*
  * Writes to the device
