@@ -2,6 +2,7 @@
  * File:	lkmasg1.c
  * Adapted for Linux 5.15 by: John Aedo
  * Class:	COP4600-SP23
+ * Modified for PA2 Assignment by: Joshua Glaspey
  */
 
 #include <linux/module.h>	  // Core header for modules.
@@ -25,13 +26,17 @@ static int major_number;
 static struct class *lkmasg1Class = NULL;	///< The device-driver class struct pointer
 static struct device *lkmasg1Device = NULL; ///< The device-driver device struct pointer
 
+#define KERNEL_BUFFER_SIZE 1024
+static char kernel_buffer[KERNEL_BUFFER_SIZE];
+static int buffer_size = 0;  // Current size of the buffer
+
 /**
  * Prototype functions for file operations.
  */
 static int open(struct inode *, struct file *);
 static int close(struct inode *, struct file *);
-static ssize_t read(struct file *, char *, size_t, loff_t *);
-static ssize_t write(struct file *, const char *, size_t, loff_t *);
+static ssize_t read(struct file *filep, char *buffer, size_t len, loff_t *offset);
+static ssize_t write(struct file *filep, const char *user_buffer, size_t len, loff_t *offset);
 
 /**
  * File operations structure and the functions it points to.
@@ -118,20 +123,62 @@ static int close(struct inode *inodep, struct file *filep)
 	return 0;
 }
 
-/*
- * Reads from device, displays in userspace, and deletes the read data
- */
-static ssize_t read(struct file *filep, char *buffer, size_t len, loff_t *offset)
+static ssize_t read(struct file *filep, char *user_buffer, size_t len, loff_t *offset)
 {
+	// Report when a character device is read
 	printk(KERN_INFO "read stub");
-	return 0;
+
+    int bytes_to_read;
+
+    // Determine the number of bytes to read
+    bytes_to_read = len < buffer_size ? len : buffer_size;
+
+	// If there is no data available, return 0 to indicate end of file
+    if (bytes_to_read == 0)
+    {
+        return 0;
+    }
+
+    // Copy data from kernel space to user space
+    if (copy_to_user(user_buffer, kernel_buffer, bytes_to_read) != 0)
+    {
+        return -EFAULT; // Error occurred while copying data
+    }
+
+	// Set the last character of the kernel buffer to \0
+	if (copy_to_user(user_buffer + bytes_to_read, "\0", 1) != 0)
+	{
+		return -EFAULT; // Error occurred while copying data
+	}
+
+    // Shift the remaining data in the buffer to the beginning
+    for (int i = bytes_to_read; i < buffer_size; ++i)
+    {
+        kernel_buffer[i - bytes_to_read] = kernel_buffer[i];
+    }
+
+    buffer_size -= bytes_to_read;
+    return bytes_to_read;
 }
+
 
 /*
  * Writes to the device
  */
-static ssize_t write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
+static ssize_t write(struct file *filep, const char *user_buffer, size_t len, loff_t *offset)
 {
+	// Report when a character device is written
 	printk(KERN_INFO "write stub");
-	return len;
+
+    int space_available = KERNEL_BUFFER_SIZE - buffer_size;
+    int bytes_to_write = len < space_available ? len : space_available;
+
+    // Copy data from user space to kernel space
+    if (copy_from_user(kernel_buffer + buffer_size, user_buffer, bytes_to_write) != 0)
+    {
+        return -EFAULT; // Error occurred while copying data
+    }
+
+    buffer_size += bytes_to_write;
+    return bytes_to_write;
 }
