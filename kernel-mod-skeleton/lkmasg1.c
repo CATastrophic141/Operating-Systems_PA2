@@ -15,7 +15,7 @@
 #define CLASS_NAME "char"	  ///< The device class -- this is a character device driver
 
 // Define a maximum buffer size as a constant
-#define MAX_BUFFER_SIZE 1024
+#define MAX_BUFFER_SIZE 4096
 
 MODULE_LICENSE("GPL");						 ///< The license type -- this affects available functionality
 MODULE_AUTHOR("John Aedo");					 ///< The author -- visible when you use modinfo
@@ -27,12 +27,11 @@ MODULE_VERSION("0.1");						 ///< A version number to inform users
  */
 static int major_number;
 
-static char *module_buffer = NULL;  // Dynamically allocated buffer
-static int buffer_size = 0;         // Size of the buffer
-static int data_in_buffer = 0;      // Amount of data in the buffer
-
 static struct class *lkmasg1Class = NULL;	///< The device-driver class struct pointer
 static struct device *lkmasg1Device = NULL; ///< The device-driver device struct pointer
+
+static char kernel_buffer[MAX_BUFFER_SIZE]; //Buffer array //Thanks josh for your input on this
+static int current_buffer_size = 0; //Current buffer sizing
 
 /**
  * Prototype functions for file operations.
@@ -41,8 +40,6 @@ static int open(struct inode *, struct file *);
 static int close(struct inode *, struct file *);
 static ssize_t read(struct file *, char *, size_t, loff_t *);
 static ssize_t write(struct file *, const char *, size_t, loff_t *);
-static int allocate_buffer(int size);
-static int release_buffer(void);
 
 /**
  * File operations structure and the functions it points to.
@@ -133,90 +130,47 @@ static int close(struct inode *inodep, struct file *filep)
  * Reads from device, displays in userspace, and deletes the read data
  */
 static ssize_t read(struct file *filep, char *user_buffer, size_t len, loff_t *offset) {
-    int bytes_to_read = len;
-    int bytes_read = 0;
+    printk(KERN_INFO "READING");
+    
+    int bytes_to_read;
 
-    if (data_in_buffer == 0) {
-        // No data available to read, return 0 bytes read.
-        return 0;
+    //Get number of bytes to read
+    if (len < buffer_size) bytes_to_read = len; //If len is less than the current buf size, print all
+    else bytes_to_read = buffer_size; //If len is greater, print for rest of size;
+
+    if (bytes_to_read == 0) return 0; //Nothing to read
+
+    //Copy message to user space
+    if (copy_to_user(user_buffer, kernel_buffer, bytes_to_read) != 0) return -EFAULT;
+
+    //Place null terminator
+    if (copy_to_user(user_buffer + bytes_to_read, "\0", 1) != 0) return -EFAULT;
+
+    for (int i = bytes_to_read; i< buffer_size; i++) {
+        kernel_buffer[i - bytes_to_read] = kernel_buffer[i] //Place remaining to start of buffer for subsequent reads
     }
 
-    while (bytes_to_read > 0 && data_in_buffer > 0) {
-        // Calculate the number of bytes to copy in this iteration.
-        int bytes_to_copy = min(bytes_to_read, data_in_buffer);
+    buffer_size = buffer_size - bytes_to_read;
 
-        if (copy_to_user(user_buffer, module_buffer, bytes_to_copy)) {
-            printk(KERN_ALERT "lkmasg1: failed to copy data to user space.\n");
-            return -EFAULT;
-        }
-
-        // Shift the remaining data in the buffer to the beginning.
-        memmove(module_buffer, module_buffer + bytes_to_copy, data_in_buffer - bytes_to_copy);
-        data_in_buffer -= bytes_to_copy;
-
-        bytes_read += bytes_to_copy;
-        bytes_to_read -= bytes_to_copy;
-    }
-
-    return bytes_read;
+    return bytes_to_read;
 }
 
 /*
  * Writes to the device
  */
 static ssize_t write(struct file *filep, const char *buffer, size_t len, loff_t *offset) {
-    int bytes_written = 0;
+    printk(KERN_INFO "WRITING");
     
-    // If the buffer hasn't been allocated or is too small, allocate a new one.
-    if (!module_buffer || buffer_size < len) {
-        if (module_buffer) {
-            release_buffer();
-        }
-        if (allocate_buffer(len)) {
-            return -ENOMEM;
-        }
-    }
+    int bytes_to_write;
 
-    // Write data to the buffer
-    bytes_written = write_data(buffer, len);
+    int free_space = MAX_BUFFER_SIZE - buffer_size;
+
+    if (len < free_space) bytes_to_write = len; //If all space is available, write everything
+    else bytes_to_write = free_space; //If not enough space is available, write for what space remains
+
+    if (copy_from_user(kernel_buffer + buffer_size, user_buffer, bytes_to_write) != 0) return -EFAULT;
+
+    buffer_size += bytes_to_write;
 
     return bytes_written;
-}
-
-// This function allocates memory for the buffer with the specified size.
-static int allocate_buffer(int size) {
-    module_buffer = kmalloc(size, GFP_KERNEL);
-    if (!module_buffer) {
-        printk(KERN_ALERT "lkmasg1: failed to allocate buffer.\n");
-        return -ENOMEM;
-    }
-    buffer_size = size;
-    data_in_buffer = 0;
-    return 0;
-}
-
-// This function releases the allocated buffer memory.
-static void release_buffer(void) {
-    if (module_buffer) {
-        kfree(module_buffer);
-        module_buffer = NULL;
-    }
-    buffer_size = 0;
-    data_in_buffer = 0;
-}
-
-// This function writes data to the buffer.
-static ssize_t write_data(const char *data, size_t len) {
-    if (data_in_buffer + len > buffer_size) {
-        len = buffer_size - data_in_buffer;  // Ensure we don't exceed buffer size
-    }
-    if (len > 0) {
-        // Copy data from user space to the module's buffer
-        if (copy_from_user(module_buffer + data_in_buffer, data, len)) {
-            printk(KERN_ALERT "lkmasg1: failed to copy data from user space.\n");
-            return -EFAULT;
-        }
-        data_in_buffer += len;
-    }
-    return len;  // Return the number of bytes successfully written
 }
